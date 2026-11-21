@@ -6,22 +6,38 @@ namespace Xbox2Ps.Core;
 public enum BridgeState { Stopped, Starting, WaitingForController, Running, Error }
 
 /// <summary>
-/// The mapping loop: polls the Xbox controller, drives a VIIPER virtual DualSense, and forwards
-/// rumble back. Runs on its own thread between <see cref="Start"/> and <see cref="Stop"/>.
+/// The mapping loop: polls the Xbox controller (and, when the profile turns it on, the keyboard
+/// and mouse), drives a VIIPER virtual DualSense, and forwards rumble back. Runs on its own thread
+/// between <see cref="Start"/> and <see cref="Stop"/>.
 /// </summary>
 public sealed class Bridge : IDisposable
 {
+    private const int KbmStepMs = 4;
+
     private readonly object _gate = new();
     private volatile CompiledProfile _profile = CompiledProfile.Default;
     private volatile bool _running;
     private volatile int _slot = -1;
     private Thread? _worker;
 
+    private volatile int _hotkey = 0x77; // F8
+    private volatile bool _autoCapture = true;
+    private KbmInput? _kbm;
+    private CompiledProfile? _kbmProfile;
+    private CompiledProfile? _kbmFailedFor;
+
+    private readonly object _outputGate = new();
+    private readonly byte[] _output = new byte[Mapper.PacketSize];
+    private bool _hasOutput;
+
     /// <summary>Raised on the bridge's thread.</summary>
     public event Action<BridgeState, string?>? StateChanged;
 
     /// <summary>Status lines, raised on the bridge's thread.</summary>
     public event Action<string>? Log;
+
+    /// <summary>Keyboard and mouse capture changed; null when keyboard and mouse aren't in use. Raised on a background thread.</summary>
+    public event Action<CaptureState?>? CaptureChanged;
 
     public BridgeState State { get; private set; } = BridgeState.Stopped;
 
@@ -31,6 +47,9 @@ public sealed class Bridge : IDisposable
     /// <summary>Whether the last virtual pad was the full USB composite DualSense (null until one was made).</summary>
     public bool? IsFullDualSense { get; private set; }
 
+    /// <summary>Keyboard and mouse capture, or null when they aren't in use.</summary>
+    public CaptureState? Capture => _kbm?.State;
+
     public bool IsActive
     {
         get { lock (_gate) return _worker is { IsAlive: true }; }
@@ -38,6 +57,14 @@ public sealed class Bridge : IDisposable
 
     /// <summary>Takes effect on the next poll, also while running.</summary>
     public void SetProfile(Profile p) => _profile = CompiledProfile.From(p);
+
+    /// <summary>The capture hotkey (virtual-key code) and whether to capture while PS Remote Play is in front.</summary>
+    public void SetCaptureOptions(int hotkey, bool autoCapture)
+    {
+        _hotkey = hotkey;
+        _autoCapture = autoCapture;
+        _kbm?.SetOptions(hotkey, autoCapture);
+    }
 
     /// <param name="requestedSlot">0-3, or null for the first connected controller.</param>
     public void Start(int? requestedSlot)
@@ -61,12 +88,73 @@ public sealed class Bridge : IDisposable
 
     public void Dispose() => Stop();
 
+    /// <summary>Copies the packet last sent to the virtual DualSense; false when nothing is being sent.</summary>
+    public bool TryCopyOutput(byte[] dest)
+    {
+        lock (_outputGate)
+        {
+            if (!_hasOutput || State != BridgeState.Running) return false;
+            Array.Copy(_output, dest, Mapper.PacketSize);
+            return true;
+        }
+    }
+
     private void Info(string msg) => Log?.Invoke(msg);
 
     private void SetState(BridgeState state, string? message)
     {
         State = state;
         StateChanged?.Invoke(state, message);
+    }
+
+    /// <summary>Starts or stops the keyboard and mouse reader to match the profile.</summary>
+    private void SyncKbm(CompiledProfile profile)
+    {
+        if (profile.KbmEnabled && _kbm is null)
+        {
+            if (ReferenceEquals(profile, _kbmFailedFor)) return; // already failed; try again after the next edit
+            try { _kbm = new KbmInput(_hotkey, _autoCapture); }
+            catch (Exception ex)
+            {
+                _kbmFailedFor = profile;
+                Info($"Keyboard and mouse couldn't start: {ex.Message}");
+                return;
+            }
+            _kbm.SetBindings(profile.KbmCodes);
+            _kbm.StateChanged += s =>
+            {
+                Info(s switch
+                {
+                    CaptureState.Captured => "Keyboard and mouse captured.",
+                    CaptureState.Paused when _autoCapture => "Keyboard and mouse paused.",
+                    CaptureState.Paused => "Keyboard and mouse released.",
+                    _ => "Keyboard and mouse released; waiting for PS Remote Play.",
+                });
+                CaptureChanged?.Invoke(s);
+            };
+            _kbmProfile = profile;
+            Info("Keyboard and mouse are on.");
+            CaptureChanged?.Invoke(_kbm.State);
+        }
+        else if (!profile.KbmEnabled && _kbm is not null)
+        {
+            StopKbm();
+            Info("Keyboard and mouse are off.");
+        }
+        else if (_kbm is not null && !ReferenceEquals(profile, _kbmProfile))
+        {
+            _kbm.SetBindings(profile.KbmCodes);
+            _kbmProfile = profile;
+        }
+    }
+
+    private void StopKbm()
+    {
+        if (_kbm is null) return;
+        _kbm.Dispose();
+        _kbm = null;
+        _kbmProfile = null;
+        CaptureChanged?.Invoke(null);
     }
 
     private void Work(int? requestedSlot)
@@ -85,10 +173,10 @@ public sealed class Bridge : IDisposable
 
             busId = Viiper.CreateBus();
 
-            // Wait for a controller before plugging in the virtual pad, so games don't
-            // see an idle DualSense while nothing is connected.
+            // Wait for a controller before plugging in the virtual pad, so games don't see an idle
+            // DualSense while nothing is connected. With keyboard and mouse on, there's no need to wait.
             bool waiting = false;
-            while (_running && (_slot = XInput.FindController(requestedSlot)) < 0)
+            while (_running && (_slot = XInput.FindController(requestedSlot)) < 0 && !_profile.KbmEnabled)
             {
                 if (!waiting) SetState(BridgeState.WaitingForController, "Waiting for an Xbox controller...");
                 waiting = true;
@@ -114,60 +202,106 @@ public sealed class Bridge : IDisposable
             Info($"Virtual DualSense{(full ? " (full USB composite)" : "")} created (USB/IP busid {busId}-{devId}).");
             if (!full)
                 Info("This VIIPER version only offers the basic DualSense, which PS Remote Play doesn't detect. Update VIIPER.");
-            Info($"Mapping Xbox controller {_slot + 1} -> virtual DualSense.");
+            Info(_slot >= 0 ? $"Mapping Xbox controller {_slot + 1} -> virtual DualSense." : "Mapping keyboard and mouse -> virtual DualSense.");
             SetState(BridgeState.Running, null);
 
             var feedback = new Thread(() => FeedbackLoop(ns, full)) { IsBackground = true, Name = "xbox2ps rumble" };
             feedback.Start();
 
+            var controllerPacket = new byte[Mapper.PacketSize];
             var packet = new byte[Mapper.PacketSize];
+            var lastSent = new byte[Mapper.PacketSize];
+            Mapper.Neutral(controllerPacket);
+            Mapper.Neutral(packet);
             uint lastPacket = uint.MaxValue;
-            CompiledProfile lastProfile = _profile;
-            long lastSend = 0;
+            CompiledProfile? lastProfile = null;
+            var frame = new KbmFrame();
+            var mouseState = new MouseStickState();
+            (double X, double Y) mouse = (0, 0);
             var clock = Stopwatch.StartNew();
+            double lastKbmStep = 0;
+            long lastSend = -1000, nextScan = 0;
 
             while (_running)
             {
-                int slot = _slot;
                 var profile = _profile;
-                bool changed;
+                SyncKbm(profile);
+                long now = clock.ElapsedMilliseconds;
+                bool changed = !ReferenceEquals(profile, lastProfile);
+
+                int slot = _slot;
                 if (slot >= 0 && XInput.TryGetState((uint)slot, out var state))
                 {
-                    // A profile edit changes the output even when the controller didn't.
-                    changed = state.dwPacketNumber != lastPacket || !ReferenceEquals(profile, lastProfile);
-                    if (changed)
+                    if (state.dwPacketNumber != lastPacket || changed)
                     {
                         lastPacket = state.dwPacketNumber;
-                        lastProfile = profile;
-                        Mapper.Build(packet, state.Gamepad, profile);
+                        Mapper.Build(controllerPacket, state.Gamepad, profile);
+                        changed = true;
                     }
                 }
                 else
                 {
-                    // Controller dropped: release everything, keep the virtual pad plugged in.
                     if (slot >= 0)
                     {
+                        // Controller dropped: release everything, keep the virtual pad plugged in.
                         Info("Xbox controller disconnected. Waiting for it to come back...");
-                        SetState(BridgeState.WaitingForController, "Xbox controller disconnected.");
+                        if (!profile.KbmEnabled) SetState(BridgeState.WaitingForController, "Xbox controller disconnected.");
+                        Mapper.Neutral(controllerPacket);
+                        changed = true;
+                        _slot = slot = -1;
+                        lastPacket = uint.MaxValue;
                     }
-                    Mapper.Neutral(packet);
-                    changed = slot >= 0;
-                    _slot = slot = XInput.FindController(requestedSlot);
-                    lastPacket = uint.MaxValue;
-                    if (slot >= 0)
+                    if (now >= nextScan)
                     {
-                        Info($"Xbox controller {slot + 1} is back.");
-                        SetState(BridgeState.Running, null);
+                        // Scanning empty slots is slow, so not on every poll.
+                        nextScan = now + 250;
+                        _slot = slot = XInput.FindController(requestedSlot);
+                        if (slot >= 0)
+                        {
+                            Info($"Xbox controller {slot + 1} connected.");
+                            SetState(BridgeState.Running, null);
+                        }
                     }
-                    else Thread.Sleep(100);
+                }
+                lastProfile = profile;
+
+                // Keyboard and mouse at a steady pace, so mouse speed is measured over even steps.
+                var kbm = _kbm;
+                bool step = false;
+                double elapsed = clock.Elapsed.TotalMilliseconds;
+                if (kbm is not null && elapsed - lastKbmStep >= KbmStepMs)
+                {
+                    kbm.Read(frame);
+                    if (frame.Captured && profile.Kbm.Mouse != MouseTarget.Off)
+                        mouse = MouseStick.Step(ref mouseState, frame.MouseDx, frame.MouseDy, elapsed - lastKbmStep, profile.Kbm);
+                    else
+                    {
+                        mouseState = default;
+                        mouse = (0, 0);
+                    }
+                    lastKbmStep = elapsed;
+                    step = true;
+                }
+
+                if (changed || step)
+                {
+                    Array.Copy(controllerPacket, packet, Mapper.PacketSize);
+                    if (kbm is not null) Mapper.ApplyKbm(packet, frame, profile, mouse);
+                    changed = !packet.AsSpan().SequenceEqual(lastSent);
                 }
 
                 // Send on change, and at least every 50 ms so the stream stays alive.
-                if (changed || clock.ElapsedMilliseconds - lastSend >= 50)
+                if (changed || now - lastSend >= 50)
                 {
                     try { ns.Write(packet); }
                     catch (IOException) { throw new ViiperException("Lost the connection to the VIIPER server."); }
-                    lastSend = clock.ElapsedMilliseconds;
+                    packet.CopyTo(lastSent, 0);
+                    lastSend = now;
+                    lock (_outputGate)
+                    {
+                        packet.CopyTo(_output, 0);
+                        _hasOutput = true;
+                    }
                 }
                 Thread.Sleep(1);
             }
@@ -180,6 +314,8 @@ public sealed class Bridge : IDisposable
         }
         finally
         {
+            lock (_outputGate) _hasOutput = false;
+            StopKbm();
             XInput.timeEndPeriod(1);
             stream?.Dispose();
             if (busId >= 0) { try { Viiper.RemoveBus(busId); } catch { } }

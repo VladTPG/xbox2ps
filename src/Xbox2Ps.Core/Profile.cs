@@ -35,6 +35,88 @@ public sealed class Combo
     public Combo(XboxInput first, XboxInput second, DsOutput output) => (First, Second, Output) = (first, second, output);
 }
 
+/// <summary>What a keyboard key or mouse button can do on the DualSense.</summary>
+public enum KbmAction
+{
+    Cross, Circle, Square, Triangle,
+    L1, R1, L2, R2,
+    L3, R3,
+    Create, Options, PS, Touchpad, Mute,
+    DpadUp, DpadDown, DpadLeft, DpadRight,
+    LeftStickUp, LeftStickDown, LeftStickLeft, LeftStickRight,
+    RightStickUp, RightStickDown, RightStickLeft, RightStickRight,
+}
+
+/// <summary>Which stick the mouse moves.</summary>
+public enum MouseTarget { RightStick, LeftStick, Off }
+
+/// <summary>Keyboard and mouse settings of a profile.</summary>
+public sealed class KbmSettings
+{
+    public const int MaxAntiDeadzone = 50;
+
+    public bool Enabled { get; set; }
+    /// <summary>Action -> key name from <see cref="KeyNames"/>; "" means unbound.</summary>
+    public Dictionary<KbmAction, string> Bindings { get; set; } = DefaultBindings();
+    public MouseTarget Mouse { get; set; } = MouseTarget.RightStick;
+    /// <summary>1-100.</summary>
+    public int MouseSensitivity { get; set; } = 50;
+    /// <summary>0-100; 50 is linear, lower reacts more to small movements, higher gives finer aim.</summary>
+    public int MouseCurve { get; set; } = 50;
+    /// <summary>Percent of full tilt the stick jumps to as soon as the mouse moves, to skip past the game's deadzone (0-50).</summary>
+    public int MouseAntiDeadzone { get; set; } = 20;
+    public bool InvertMouseY { get; set; }
+
+    /// <summary>A typical PC shooter layout.</summary>
+    public static Dictionary<KbmAction, string> DefaultBindings() => new()
+    {
+        [KbmAction.Cross] = "Space",
+        [KbmAction.Circle] = "C",
+        [KbmAction.Square] = "R",
+        [KbmAction.Triangle] = "F",
+        [KbmAction.L1] = "Q",
+        [KbmAction.R1] = "E",
+        [KbmAction.L2] = "MouseRight",
+        [KbmAction.R2] = "MouseLeft",
+        [KbmAction.L3] = "LeftShift",
+        [KbmAction.R3] = "V",
+        [KbmAction.Create] = "M",
+        [KbmAction.Options] = "Escape",
+        [KbmAction.PS] = "Home",
+        [KbmAction.Touchpad] = "Tab",
+        [KbmAction.Mute] = "",
+        [KbmAction.DpadUp] = "Up",
+        [KbmAction.DpadDown] = "Down",
+        [KbmAction.DpadLeft] = "Left",
+        [KbmAction.DpadRight] = "Right",
+        [KbmAction.LeftStickUp] = "W",
+        [KbmAction.LeftStickDown] = "S",
+        [KbmAction.LeftStickLeft] = "A",
+        [KbmAction.LeftStickRight] = "D",
+        [KbmAction.RightStickUp] = "",
+        [KbmAction.RightStickDown] = "",
+        [KbmAction.RightStickLeft] = "",
+        [KbmAction.RightStickRight] = "",
+    };
+
+    internal void Normalize()
+    {
+        Bindings ??= [];
+        foreach (var (action, key) in DefaultBindings())
+            Bindings.TryAdd(action, key);
+        foreach (var action in Bindings.Keys.ToList())
+        {
+            if (!Enum.IsDefined(action)) { Bindings.Remove(action); continue; }
+            string key = Bindings[action] ?? "";
+            Bindings[action] = KeyNames.Code(key) >= 0 ? KeyNames.Name(KeyNames.Code(key))! : "";
+        }
+        if (!Enum.IsDefined(Mouse)) Mouse = MouseTarget.RightStick;
+        MouseSensitivity = Math.Clamp(MouseSensitivity, 1, 100);
+        MouseCurve = Math.Clamp(MouseCurve, 0, 100);
+        MouseAntiDeadzone = Math.Clamp(MouseAntiDeadzone, 0, MaxAntiDeadzone);
+    }
+}
+
 public sealed class StickSettings
 {
     public bool InvertX { get; set; }
@@ -61,6 +143,8 @@ public sealed class Profile
     public bool RumbleEnabled { get; set; } = true;
     /// <summary>Percent (0-100).</summary>
     public int RumbleStrength { get; set; } = 100;
+    /// <summary>Keyboard and mouse; off unless turned on.</summary>
+    public KbmSettings Kbm { get; set; } = new();
 
     public static Profile CreateDefault(string name = "Default") => new() { Name = name };
 
@@ -109,6 +193,8 @@ public sealed class Profile
         RightStick.Deadzone = Math.Clamp(RightStick.Deadzone, 0, MaxDeadzone);
         TriggerThreshold = Math.Clamp(TriggerThreshold, 0, MaxThreshold);
         RumbleStrength = Math.Clamp(RumbleStrength, 0, 100);
+        Kbm ??= new();
+        Kbm.Normalize();
         return this;
     }
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+- **Keyboard and mouse.** Play through Remote Play with a keyboard and mouse, with or without an Xbox controller; both can be used at once.
+  - xbox2ps captures the keyboard and mouse while PS Remote Play is the window in front, and releases them when you switch away. F8 (changeable) pauses and resumes capture. Capture can also be left entirely to the hotkey.
+  - The mouse moves the right stick (or the left, or neither), with sensitivity, anti-deadzone, response curve and invert settings.
+  - Every DualSense button and stick direction can be bound to a key, a mouse button or the wheel. The default is a shooter layout: WASD, mouse aim, clicks on R2/L2.
+  - While captured, the cursor is hidden and mapped keys and clicks don't reach Remote Play. Alt, the Windows key and Ctrl+Alt+Del always work.
+  - Works when you play on this PC from another computer through Parsec or Remote Desktop, including apps that send the mouse as pointer positions.
+  - Saved per profile and off by default, so 1.0 profiles behave exactly as before.
+- A **Keyboard** status in the header: captured, paused, or waiting for Remote Play.
+- The live preview shows what's actually sent to the DualSense, keyboard and mouse included.
+
 ## 1.0.0
 
 First public release.

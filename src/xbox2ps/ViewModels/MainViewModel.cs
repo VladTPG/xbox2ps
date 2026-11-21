@@ -9,12 +9,15 @@ public sealed class MainViewModel : ObservableObject
 {
     private const int MaxLogLines = 500;
     private const double StickBox = 100, StickDot = 12;
+    private const double StickHalf = (StickBox - StickDot) / 2;
 
     private readonly Bridge _bridge = new();
     private readonly AppSettings _settings;
     private readonly Dispatcher _ui;
-    private readonly DispatcherTimer _saveTimer, _liveTimer, _probeTimer;
+    private readonly DispatcherTimer _saveTimer, _liveTimer, _probeTimer, _listenTimer;
     private readonly byte[] _preview = new byte[Mapper.PacketSize];
+    private readonly byte[] _controllerPreview = new byte[Mapper.PacketSize];
+    private readonly byte[] _shown = new byte[Mapper.PacketSize];
 
     private Profile _profile;
     private CompiledProfile _compiled;
@@ -37,9 +40,14 @@ public sealed class MainViewModel : ObservableObject
 
         foreach (var input in Enum.GetValues<XboxInput>())
             Buttons.Add(new ButtonRowViewModel(input, ProfileEdited));
+        // Mute last, so the rest pair up in the two columns (Cross/Circle, L1/R1, D-pad up/down...).
+        foreach (var action in Enum.GetValues<KbmAction>().OrderBy(a => a == KbmAction.Mute))
+            KbmRows.Add(new KbmRowViewModel(action));
 
         _bridge.Log += msg => _ui.BeginInvoke(() => AddLog(msg));
         _bridge.StateChanged += (state, msg) => _ui.BeginInvoke(() => OnBridgeState(state, msg));
+        _bridge.CaptureChanged += capture => _ui.BeginInvoke(() => OnCapture(capture));
+        ApplyCaptureOptions();
 
         _saveTimer = new DispatcherTimer(DispatcherPriority.Background, _ui) { Interval = TimeSpan.FromMilliseconds(600) };
         _saveTimer.Tick += (_, _) => SaveNow();
@@ -47,6 +55,8 @@ public sealed class MainViewModel : ObservableObject
         _liveTimer.Tick += (_, _) => LiveTick();
         _probeTimer = new DispatcherTimer(DispatcherPriority.Background, _ui) { Interval = TimeSpan.FromSeconds(3) };
         _probeTimer.Tick += (_, _) => ProbeViiper();
+        _listenTimer = new DispatcherTimer(DispatcherPriority.Normal, _ui) { Interval = TimeSpan.FromSeconds(6) };
+        _listenTimer.Tick += (_, _) => CancelListening();
 
         var names = ProfileStore.EnsureAny();
         foreach (var n in names) ProfileNames.Add(n);
@@ -59,7 +69,10 @@ public sealed class MainViewModel : ObservableObject
         try { Autostart.Refresh(); } catch (Exception) { /* registry blocked; leave it */ }
 
         AddLog($"xbox2ps {AppInfo.Version} started.");
-        ShowPreview(default, neutral: true);
+        Mapper.Neutral(_controllerPreview);
+        Mapper.Neutral(_preview);
+        ShowController(default, connected: false);
+        ShowOutput(_preview);
         UpdateStatus();
         ProbeViiper();
         _liveTimer.Start();
@@ -204,6 +217,236 @@ public sealed class MainViewModel : ObservableObject
     public int L2Value { get => _l2Value; private set => Set(ref _l2Value, value); }
     public int R2Value { get => _r2Value; private set => Set(ref _r2Value, value); }
 
+    // ---- Keyboard & mouse ----
+
+    private bool _kbmEnabled, _invertMouseY;
+    private MouseTarget _mouseTarget;
+    private int _mouseSensitivity, _mouseCurve, _mouseAntiDeadzone;
+    private CaptureState? _capture;
+    private bool _captureNoticeShown;
+    private KbmRowViewModel? _listeningRow;
+    private bool _listeningHotkey;
+    private string _kbmNote = "";
+    private StatusLevel _kbmLevel;
+    private string _kbmText = "Off";
+
+    /// <summary>A short notice for the tray (title, text), e.g. the first time capture turns on.</summary>
+    public event Action<string, string>? Notify;
+
+    public ObservableCollection<KbmRowViewModel> KbmRows { get; } = [];
+    public IReadOnlyList<Option<MouseTarget>> MouseTargetOptions => Labels.MouseTargets;
+
+    public bool KbmEnabled
+    {
+        get => _kbmEnabled;
+        set { if (Set(ref _kbmEnabled, value)) { ProfileEdited(); UpdateKbmStatus(); } }
+    }
+
+    public MouseTarget MouseTarget
+    {
+        get => _mouseTarget;
+        set { if (Set(ref _mouseTarget, value)) { ProfileEdited(); OnPropertyChanged(nameof(MouseEnabled)); } }
+    }
+
+    public bool MouseEnabled => MouseTarget != MouseTarget.Off;
+
+    public int MouseSensitivity
+    {
+        get => _mouseSensitivity;
+        set { if (Set(ref _mouseSensitivity, Math.Clamp(value, 1, 100))) ProfileEdited(); }
+    }
+
+    public int MouseCurve
+    {
+        get => _mouseCurve;
+        set { if (Set(ref _mouseCurve, Math.Clamp(value, 0, 100))) ProfileEdited(); }
+    }
+
+    public int MouseAntiDeadzone
+    {
+        get => _mouseAntiDeadzone;
+        set { if (Set(ref _mouseAntiDeadzone, Math.Clamp(value, 0, KbmSettings.MaxAntiDeadzone))) ProfileEdited(); }
+    }
+
+    public bool InvertMouseY { get => _invertMouseY; set { if (Set(ref _invertMouseY, value)) ProfileEdited(); } }
+
+    /// <summary>App-wide, not per profile.</summary>
+    public bool AutoCaptureRemotePlay
+    {
+        get => _settings.AutoCaptureRemotePlay;
+        set
+        {
+            if (value == _settings.AutoCaptureRemotePlay) return;
+            _settings.AutoCaptureRemotePlay = value;
+            SaveSettings();
+            ApplyCaptureOptions();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CaptureHint));
+            UpdateKbmStatus();
+        }
+    }
+
+    private string HotkeyName => KeyNames.Name(_settings.CaptureHotkeyCode) ?? "F8";
+    private string HotkeyDisplay => KeyNames.Display(HotkeyName);
+
+    public string HotkeyText => _listeningHotkey ? "Press a key…" : HotkeyDisplay;
+
+    public string CaptureHint => AutoCaptureRemotePlay
+        ? "While PS Remote Play is the window in front, the keyboard and mouse drive the DualSense and the cursor stays hidden. " +
+          $"Alt+Tab away to get them back, or press {HotkeyDisplay} to pause and resume."
+        : $"Press {HotkeyDisplay} to start capturing the keyboard and mouse, and again to stop. Switching to xbox2ps releases them too.";
+
+    /// <summary>Feedback after binding a key ("Space moved from Cross to Circle.").</summary>
+    public string KbmNote { get => _kbmNote; private set { if (Set(ref _kbmNote, value)) OnPropertyChanged(nameof(HasKbmNote)); } }
+    public bool HasKbmNote => _kbmNote.Length > 0;
+
+    public StatusLevel KbmLevel { get => _kbmLevel; private set => Set(ref _kbmLevel, value); }
+    public string KbmText { get => _kbmText; private set => Set(ref _kbmText, value); }
+
+    public bool IsListening => _listeningRow is not null || _listeningHotkey;
+    public bool IsListeningForHotkey => _listeningHotkey;
+    public KbmRowViewModel? ListeningRow => _listeningRow;
+
+    private void ApplyCaptureOptions() => _bridge.SetCaptureOptions(_settings.CaptureHotkeyCode, _settings.AutoCaptureRemotePlay);
+
+    private void OnCapture(CaptureState? capture)
+    {
+        _capture = capture;
+        UpdateKbmStatus();
+        if (capture == CaptureState.Captured && !_captureNoticeShown)
+        {
+            _captureNoticeShown = true;
+            Notify?.Invoke("Keyboard and mouse captured",
+                $"They now drive the DualSense. Press {HotkeyDisplay} or Alt+Tab to get them back.");
+        }
+    }
+
+    private void UpdateKbmStatus()
+    {
+        (KbmLevel, KbmText) = (_kbmEnabled, _capture) switch
+        {
+            (false, _) => (StatusLevel.Off, "Off"),
+            (true, CaptureState.Captured) => (StatusLevel.Ok, "Captured"),
+            (true, CaptureState.Paused) when AutoCaptureRemotePlay => (StatusLevel.Warn, $"Paused ({HotkeyDisplay})"),
+            (true, CaptureState.Paused) => (StatusLevel.Off, $"Press {HotkeyDisplay} to capture"),
+            (true, CaptureState.Waiting) => (StatusLevel.Off, "Waiting for Remote Play"),
+            _ => (StatusLevel.Off, IsActive ? "Starting…" : "Starts with mapping"),
+        };
+    }
+
+    public void StartListening(KbmRowViewModel row)
+    {
+        CancelListening();
+        KbmNote = "";
+        _listeningRow = row;
+        row.IsListening = true;
+        _listenTimer.Start();
+    }
+
+    public void StartListeningHotkey()
+    {
+        CancelListening();
+        KbmNote = "";
+        _listeningHotkey = true;
+        OnPropertyChanged(nameof(HotkeyText));
+        _listenTimer.Start();
+    }
+
+    public void CancelListening()
+    {
+        _listenTimer.Stop();
+        if (_listeningRow is { } row)
+        {
+            row.IsListening = false;
+            _listeningRow = null;
+        }
+        if (_listeningHotkey)
+        {
+            _listeningHotkey = false;
+            OnPropertyChanged(nameof(HotkeyText));
+        }
+    }
+
+    /// <summary>A key or mouse button pressed in the window while waiting for one.</summary>
+    /// <param name="code">A <see cref="KeyNames"/> code (virtual-key code, or a wheel code).</param>
+    public void HandleKey(int code)
+    {
+        if (!IsListening) return;
+        bool forHotkey = _listeningHotkey;
+        var row = _listeningRow;
+        CancelListening();
+
+        string? name = KeyNames.Name(code);
+        if (forHotkey)
+        {
+            if (name is null || KeyNames.IsMouse(code)) KbmNote = "The hotkey has to be a keyboard key.";
+            else SetHotkey(name);
+            return;
+        }
+
+        if (row is null) return;
+        if (name is null)
+        {
+            KbmNote = "That key can't be used. Pick another one.";
+            return;
+        }
+        if (code == _settings.CaptureHotkeyCode)
+        {
+            KbmNote = $"{HotkeyDisplay} is the capture hotkey. Pick another key, or change the hotkey.";
+            return;
+        }
+
+        KbmNote = "";
+        foreach (var other in KbmRows)
+        {
+            if (other == row || !string.Equals(other.Key, name, StringComparison.OrdinalIgnoreCase)) continue;
+            other.Key = "";
+            KbmNote = $"{KeyNames.Display(name)} moved from {other.Display.Label} to {row.Display.Label}.";
+        }
+        row.Key = name;
+        ProfileEdited();
+    }
+
+    private void SetHotkey(string name)
+    {
+        _settings.CaptureHotkey = name;
+        SaveSettings();
+        ApplyCaptureOptions();
+        foreach (var row in KbmRows)
+        {
+            if (!string.Equals(row.Key, name, StringComparison.OrdinalIgnoreCase)) continue;
+            row.Key = "";
+            KbmNote = $"{KeyNames.Display(name)} is now the hotkey, so it no longer presses {row.Display.Label}.";
+            ProfileEdited();
+        }
+        OnPropertyChanged(nameof(HotkeyText));
+        OnPropertyChanged(nameof(CaptureHint));
+        UpdateKbmStatus();
+    }
+
+    public void ClearKey(KbmRowViewModel row)
+    {
+        CancelListening();
+        KbmNote = "";
+        if (!row.HasKey) return;
+        row.Key = "";
+        ProfileEdited();
+    }
+
+    public void ResetKeys()
+    {
+        CancelListening();
+        var defaults = KbmSettings.DefaultBindings();
+        string hotkey = HotkeyName;
+        foreach (var row in KbmRows)
+        {
+            string key = defaults.TryGetValue(row.Action, out var k) ? k : "";
+            row.Key = string.Equals(key, hotkey, StringComparison.OrdinalIgnoreCase) ? "" : key;
+        }
+        KbmNote = "";
+        ProfileEdited();
+    }
+
     // ---- Options ----
 
     private bool _launchWithWindows;
@@ -264,6 +507,8 @@ public sealed class MainViewModel : ObservableObject
     private void LoadProfile(string name)
     {
         _saveTimer.Stop();
+        CancelListening();
+        KbmNote = "";
         _profile = ProfileStore.Load(name);
         LoadIntoUi(_profile);
         _settings.ActiveProfile = name;
@@ -291,6 +536,16 @@ public sealed class MainViewModel : ObservableObject
             TriggerThreshold = p.TriggerThreshold;
             RumbleEnabled = p.RumbleEnabled;
             RumbleStrength = p.RumbleStrength;
+
+            var k = p.Kbm;
+            foreach (var row in KbmRows)
+                row.Key = k.Bindings.TryGetValue(row.Action, out var key) ? key : "";
+            KbmEnabled = k.Enabled;
+            MouseTarget = k.Mouse;
+            MouseSensitivity = k.MouseSensitivity;
+            MouseCurve = k.MouseCurve;
+            MouseAntiDeadzone = k.MouseAntiDeadzone;
+            InvertMouseY = k.InvertMouseY;
         }
         finally { _loading = false; }
         _compiled = CompiledProfile.From(p);
@@ -308,6 +563,16 @@ public sealed class MainViewModel : ObservableObject
         TriggerThreshold = TriggerThreshold,
         RumbleEnabled = RumbleEnabled,
         RumbleStrength = RumbleStrength,
+        Kbm = new KbmSettings
+        {
+            Enabled = KbmEnabled,
+            Bindings = KbmRows.ToDictionary(r => r.Action, r => r.Key),
+            Mouse = MouseTarget,
+            MouseSensitivity = MouseSensitivity,
+            MouseCurve = MouseCurve,
+            MouseAntiDeadzone = MouseAntiDeadzone,
+            InvertMouseY = InvertMouseY,
+        },
     }.Normalize();
 
     /// <summary>Any control changed: apply now (also while mapping), save shortly.</summary>
@@ -442,6 +707,8 @@ public sealed class MainViewModel : ObservableObject
 
     public void ResetProfile()
     {
+        CancelListening();
+        KbmNote = "";
         _profile = Profile.CreateDefault(_profile.Name);
         LoadIntoUi(_profile);
         SaveNow();
@@ -535,7 +802,9 @@ public sealed class MainViewModel : ObservableObject
         {
             BridgeState.Starting => (StatusLevel.Warn, "Starting…", "Starting…"),
             BridgeState.WaitingForController => (StatusLevel.Warn, "Waiting for controller", "Waiting for an Xbox controller"),
-            BridgeState.Running when full => (StatusLevel.Ok, "Active", $"Mapping controller {_bridge.CurrentSlot + 1} to the virtual DualSense"),
+            BridgeState.Running when full => (StatusLevel.Ok, "Active", _bridge.CurrentSlot >= 0
+                ? $"Mapping controller {_bridge.CurrentSlot + 1} to the virtual DualSense"
+                : "Mapping the keyboard and mouse to the virtual DualSense"),
             BridgeState.Running => (StatusLevel.Warn, "Active (basic)", "Mapping, but PS Remote Play needs a newer VIIPER"),
             BridgeState.Error => (StatusLevel.Bad, "Error", $"Error: {_lastError}"),
             _ => (StatusLevel.Off, "Off", "Stopped"),
@@ -568,6 +837,8 @@ public sealed class MainViewModel : ObservableObject
         {
             ShowBanner = false;
         }
+
+        UpdateKbmStatus();
     }
 
     // ---- Live preview ----
@@ -600,38 +871,48 @@ public sealed class MainViewModel : ObservableObject
             slot = _previewSlot;
         }
 
-        if (!ok)
+        ControllerLevel = ok ? StatusLevel.Ok : StatusLevel.Off;
+        ControllerText = ok ? $"Controller {slot + 1}" : "Not connected";
+
+        // The controller side: highlighted rows and combos, and the grey stick dots.
+        uint packetNumber = ok ? st.dwPacketNumber : uint.MaxValue;
+        if (packetNumber != _lastPreviewPacket || !ReferenceEquals(_lastPreviewCompiled, _compiled))
         {
-            ControllerLevel = StatusLevel.Off;
-            ControllerText = "Not connected";
-            if (_lastPreviewPacket != uint.MaxValue)
-            {
-                _lastPreviewPacket = uint.MaxValue;
-                ShowPreview(default, neutral: true);
-            }
-            return;
+            _lastPreviewPacket = packetNumber;
+            _lastPreviewCompiled = _compiled;
+            if (ok) Mapper.Build(_controllerPreview, st.Gamepad, _compiled);
+            else Mapper.Neutral(_controllerPreview);
+            ShowController(ok ? st.Gamepad : default, ok);
         }
 
-        ControllerLevel = StatusLevel.Ok;
-        ControllerText = $"Controller {slot + 1}";
-        if (st.dwPacketNumber == _lastPreviewPacket && ReferenceEquals(_lastPreviewCompiled, _compiled)) return;
-        _lastPreviewPacket = st.dwPacketNumber;
-        _lastPreviewCompiled = _compiled;
-        ShowPreview(st.Gamepad, neutral: false);
+        // The DualSense side: while mapping, exactly what was last sent (keyboard and mouse
+        // included); otherwise what the controller alone would send.
+        if (!_bridge.TryCopyOutput(_preview)) Array.Copy(_controllerPreview, _preview, Mapper.PacketSize);
+        if (!_preview.AsSpan().SequenceEqual(_shown))
+        {
+            _preview.CopyTo(_shown, 0);
+            ShowOutput(_preview);
+        }
     }
 
-    private void ShowPreview(XInput.XINPUT_GAMEPAD g, bool neutral)
+    private void ShowController(XInput.XINPUT_GAMEPAD g, bool connected)
     {
-        if (neutral) Mapper.Neutral(_preview);
-        else Mapper.Build(_preview, g, _compiled);
-
         foreach (var row in Buttons)
-            row.IsHeld = !neutral && Mapper.IsPressed(g, row.Input, TriggerThreshold);
+            row.IsHeld = connected && Mapper.IsPressed(g, row.Input, TriggerThreshold);
         foreach (var combo in Combos)
-            combo.IsActive = !neutral && combo.First != combo.Second &&
+            combo.IsActive = connected && combo.First != combo.Second &&
                              Mapper.IsPressed(g, combo.First, TriggerThreshold) && Mapper.IsPressed(g, combo.Second, TriggerThreshold);
 
-        var pressed = Mapper.PressedOutputs(_preview);
+        double Raw(short v) => StickHalf + v / 32768.0 * StickHalf;
+        LeftRawX = Raw(g.sThumbLX);
+        LeftRawY = Raw((short)Math.Clamp(-g.sThumbLY, short.MinValue, short.MaxValue));
+        RightRawX = Raw(g.sThumbRX);
+        RightRawY = Raw((short)Math.Clamp(-g.sThumbRY, short.MinValue, short.MaxValue));
+    }
+
+    private void ShowOutput(byte[] packet)
+    {
+        var pressed = Mapper.PressedOutputs(packet);
         if (!pressed.SequenceEqual(PressedOutputs.Select(o => o.Value)))
         {
             PressedOutputs.Clear();
@@ -639,19 +920,13 @@ public sealed class MainViewModel : ObservableObject
         }
         NothingPressed = pressed.Count == 0;
 
-        const double half = (StickBox - StickDot) / 2;
-        double Raw(short v) => half + v / 32768.0 * half;
-        double Out(byte b) => half + (sbyte)b / 128.0 * half;
-        LeftRawX = Raw(g.sThumbLX);
-        LeftRawY = Raw((short)Math.Clamp(-g.sThumbLY, short.MinValue, short.MaxValue));
-        RightRawX = Raw(g.sThumbRX);
-        RightRawY = Raw((short)Math.Clamp(-g.sThumbRY, short.MinValue, short.MaxValue));
-        LeftOutX = Out(_preview[0]);
-        LeftOutY = Out(_preview[1]);
-        RightOutX = Out(_preview[2]);
-        RightOutY = Out(_preview[3]);
-        L2Value = _preview[9];
-        R2Value = _preview[10];
+        double Out(byte b) => StickHalf + (sbyte)b / 128.0 * StickHalf;
+        LeftOutX = Out(packet[0]);
+        LeftOutY = Out(packet[1]);
+        RightOutX = Out(packet[2]);
+        RightOutY = Out(packet[3]);
+        L2Value = packet[9];
+        R2Value = packet[10];
     }
 
     // ---- Log ----

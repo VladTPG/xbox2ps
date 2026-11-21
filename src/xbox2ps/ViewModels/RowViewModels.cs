@@ -74,3 +74,37 @@ public sealed class ComboViewModel(Action edited) : ObservableObject
 
     internal Combo ToCombo() => new(First, Second, Output);
 }
+
+/// <summary>One row on the Keyboard &amp; mouse tab: a DualSense button or stick direction and its key.</summary>
+public sealed class KbmRowViewModel(KbmAction action) : ObservableObject
+{
+    private string _key = "";
+    private bool _isListening;
+
+    public KbmAction Action { get; } = action;
+
+    /// <summary>For the shared glyph + name template.</summary>
+    public Option<DsOutput> Display { get; } = new(Labels.OutputOf(action), Labels.Of(action));
+
+    /// <summary>A <see cref="KeyNames"/> name, or "" when unbound.</summary>
+    public string Key
+    {
+        get => _key;
+        set
+        {
+            if (!Set(ref _key, value ?? "")) return;
+            OnPropertyChanged(nameof(KeyText));
+            OnPropertyChanged(nameof(HasKey));
+        }
+    }
+
+    public bool IsListening
+    {
+        get => _isListening;
+        set { if (Set(ref _isListening, value)) OnPropertyChanged(nameof(KeyText)); }
+    }
+
+    public bool HasKey => _key.Length > 0;
+
+    public string KeyText => IsListening ? "Press a key…" : _key.Length == 0 ? "Not set" : KeyNames.Display(_key);
+}

@@ -38,6 +38,7 @@ public partial class App : Application
         _vm = new MainViewModel(settings);
         _window = new MainWindow(_vm, this);
         _tray = new Tray(_vm, ShowMainWindow, Quit);
+        _vm.Notify += (title, text) => _tray?.ShowHint(title, text);
 
         new Thread(WaitForShowRequests) { IsBackground = true, Name = "xbox2ps show-request" }.Start();
 

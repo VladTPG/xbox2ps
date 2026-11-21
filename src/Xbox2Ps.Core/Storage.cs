@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Xbox2Ps.Core;
 
@@ -12,6 +13,21 @@ public sealed class AppSettings
     public bool StartMinimized { get; set; }
     public bool CloseToTray { get; set; } = true;
     public bool TrayHintShown { get; set; }
+    /// <summary>Key name (see <see cref="KeyNames"/>) that pauses and resumes keyboard and mouse capture.</summary>
+    public string CaptureHotkey { get; set; } = "F8";
+    /// <summary>Capture the keyboard and mouse whenever PS Remote Play is the window in front.</summary>
+    public bool AutoCaptureRemotePlay { get; set; } = true;
+
+    /// <summary>The hotkey as a virtual-key code; F8 if the stored one isn't a keyboard key.</summary>
+    [JsonIgnore]
+    public int CaptureHotkeyCode
+    {
+        get
+        {
+            int code = KeyNames.Code(CaptureHotkey);
+            return code is > 0 and < 256 && !KeyNames.IsMouse(code) ? code : 0x77;
+        }
+    }
 
     public static string Folder { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "xbox2ps");

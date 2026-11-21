@@ -58,6 +58,33 @@ public static class Labels
     /// <summary>The shared dropdown entry for an output (so the preview reuses the same objects).</summary>
     public static Option<DsOutput> OptionOf(DsOutput output) => Outputs[(int)output];
 
+    /// <summary>The DualSense output a keyboard action presses, or None for a stick direction.</summary>
+    public static DsOutput OutputOf(KbmAction action) =>
+        Enum.TryParse<DsOutput>(action.ToString(), out var o) ? o : DsOutput.None;
+
+    public static string Of(KbmAction action) => action switch
+    {
+        KbmAction.LeftStickUp => "Left stick up",
+        KbmAction.LeftStickDown => "Left stick down",
+        KbmAction.LeftStickLeft => "Left stick left",
+        KbmAction.LeftStickRight => "Left stick right",
+        KbmAction.RightStickUp => "Right stick up",
+        KbmAction.RightStickDown => "Right stick down",
+        KbmAction.RightStickLeft => "Right stick left",
+        KbmAction.RightStickRight => "Right stick right",
+        _ => Of(OutputOf(action)),
+    };
+
+    public static string Of(MouseTarget target) => target switch
+    {
+        MouseTarget.RightStick => "Right stick (camera / aim)",
+        MouseTarget.LeftStick => "Left stick",
+        _ => "Nothing",
+    };
+
+    public static IReadOnlyList<Option<MouseTarget>> MouseTargets { get; } =
+        Enum.GetValues<MouseTarget>().Select(t => new Option<MouseTarget>(t, Of(t))).ToList();
+
     public static IReadOnlyList<Option<XboxInput>> Inputs { get; } =
         Enum.GetValues<XboxInput>().Select(i => new Option<XboxInput>(i, Of(i))).ToList();
 }

@@ -19,10 +19,24 @@ public sealed class CompiledProfile
     internal readonly bool RumbleEnabled;
     internal readonly int RumbleStrength;
 
+    /// <summary>Keyboard and mouse: on, the bound (action, key code) pairs, and the mouse settings.</summary>
+    public readonly bool KbmEnabled;
+    internal readonly (KbmAction Action, int Code)[] KbmBindings;
+    internal readonly KbmSettings Kbm;
+
+    /// <summary>The key codes to keep from other apps while captured.</summary>
+    public IEnumerable<int> KbmCodes => KbmBindings.Select(b => b.Code).Distinct();
+
     public static CompiledProfile Default { get; } = From(Profile.CreateDefault());
 
     private CompiledProfile(Profile p)
     {
+        Kbm = p.Kbm;
+        KbmEnabled = p.Kbm.Enabled;
+        KbmBindings = p.Kbm.Bindings
+            .Select(b => (b.Key, KeyNames.Code(b.Value)))
+            .Where(b => b.Item2 >= 0)
+            .ToArray();
         foreach (var (input, output) in p.Buttons) Map[(int)input] = output;
         Combos = p.Combos.Select(c => ((1 << (int)c.First) | (1 << (int)c.Second), c.Output)).ToArray();
         Threshold = p.TriggerThreshold;
@@ -157,6 +171,99 @@ public static class Mapper
         p[9] = (byte)o.L2;
         p[10] = (byte)o.R2;
         Rest(p);
+    }
+
+    /// <summary>
+    /// Adds the keyboard and mouse on top of a packet already built from the controller:
+    /// buttons combine, L2/R2 take the higher value, sticks add up (clamped).
+    /// <paramref name="mouse"/> is the mouse's stick deflection from <see cref="MouseStick.Step"/>.
+    /// </summary>
+    public static void ApplyKbm(byte[] p, KbmFrame frame, CompiledProfile c, (double X, double Y) mouse)
+    {
+        if (!c.KbmEnabled || !frame.Captured) return;
+
+        var o = new Out
+        {
+            Buttons = BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(4)),
+            Dpad = p[8],
+            L2 = p[9],
+            R2 = p[10],
+        };
+        double lx = 0, ly = 0, rx = 0, ry = 0;
+        foreach (var (action, code) in c.KbmBindings)
+        {
+            if (!frame.Down[code]) continue;
+            switch (action)
+            {
+                case KbmAction.LeftStickUp: ly -= 1; break;
+                case KbmAction.LeftStickDown: ly += 1; break;
+                case KbmAction.LeftStickLeft: lx -= 1; break;
+                case KbmAction.LeftStickRight: lx += 1; break;
+                case KbmAction.RightStickUp: ry -= 1; break;
+                case KbmAction.RightStickDown: ry += 1; break;
+                case KbmAction.RightStickLeft: rx -= 1; break;
+                case KbmAction.RightStickRight: rx += 1; break;
+                default: o.Press(ToOutput(action)); break;
+            }
+        }
+
+        // Opposite keys cancel; diagonals stay on the circle like a real stick.
+        ClampToCircle(ref lx, ref ly);
+        ClampToCircle(ref rx, ref ry);
+        switch (c.Kbm.Mouse)
+        {
+            case MouseTarget.RightStick: rx += mouse.X; ry += mouse.Y; break;
+            case MouseTarget.LeftStick: lx += mouse.X; ly += mouse.Y; break;
+        }
+
+        p[0] = AddAxis(p[0], lx);
+        p[1] = AddAxis(p[1], ly);
+        p[2] = AddAxis(p[2], rx);
+        p[3] = AddAxis(p[3], ry);
+        BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(4), o.Buttons);
+        p[8] = o.Dpad;
+        p[9] = (byte)o.L2;
+        p[10] = (byte)o.R2;
+    }
+
+    private static DsOutput ToOutput(KbmAction a) => a switch
+    {
+        KbmAction.Cross => DsOutput.Cross,
+        KbmAction.Circle => DsOutput.Circle,
+        KbmAction.Square => DsOutput.Square,
+        KbmAction.Triangle => DsOutput.Triangle,
+        KbmAction.L1 => DsOutput.L1,
+        KbmAction.R1 => DsOutput.R1,
+        KbmAction.L2 => DsOutput.L2,
+        KbmAction.R2 => DsOutput.R2,
+        KbmAction.L3 => DsOutput.L3,
+        KbmAction.R3 => DsOutput.R3,
+        KbmAction.Create => DsOutput.Create,
+        KbmAction.Options => DsOutput.Options,
+        KbmAction.PS => DsOutput.PS,
+        KbmAction.Touchpad => DsOutput.Touchpad,
+        KbmAction.Mute => DsOutput.Mute,
+        KbmAction.DpadUp => DsOutput.DpadUp,
+        KbmAction.DpadDown => DsOutput.DpadDown,
+        KbmAction.DpadLeft => DsOutput.DpadLeft,
+        KbmAction.DpadRight => DsOutput.DpadRight,
+        _ => DsOutput.None,
+    };
+
+    private static void ClampToCircle(ref double x, ref double y)
+    {
+        x = Math.Clamp(x, -1, 1);
+        y = Math.Clamp(y, -1, 1);
+        double len = Math.Sqrt(x * x + y * y);
+        if (len > 1) { x /= len; y /= len; }
+    }
+
+    // Adds a deflection (-1..1, + = right/down) to a packet axis byte (int8, -128 = left/up).
+    private static byte AddAxis(byte current, double add)
+    {
+        if (add == 0) return current;
+        int v = (sbyte)current + (int)Math.Round(add * 127);
+        return (byte)(sbyte)Math.Clamp(v, -128, 127);
     }
 
     /// <summary>Everything released, sticks centred.</summary>

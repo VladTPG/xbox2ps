@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using Microsoft.Win32;
 using Xbox2Ps.Core;
 using Xbox2Ps.ViewModels;
@@ -36,6 +38,106 @@ public partial class MainWindow : Window
     }
 
     private void StartStop_Click(object sender, RoutedEventArgs e) => _vm.ToggleMapping();
+
+    // ---- Keyboard & mouse: picking a key ----
+
+    private void KbmKey_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is KbmRowViewModel row) _vm.StartListening(row);
+    }
+
+    private void KbmClear_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is KbmRowViewModel row) _vm.ClearKey(row);
+    }
+
+    private void Hotkey_Click(object sender, RoutedEventArgs e) => _vm.StartListeningHotkey();
+
+    private void ResetKeys_Click(object sender, RoutedEventArgs e) => _vm.ResetKeys();
+
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        if (_vm.IsListening)
+        {
+            var key = e.Key switch
+            {
+                Key.System => e.SystemKey,
+                Key.ImeProcessed => e.ImeProcessedKey,
+                Key.DeadCharProcessed => e.DeadCharProcessedKey,
+                _ => e.Key,
+            };
+            _vm.HandleKey(KeyInterop.VirtualKeyFromKey(key));
+            e.Handled = true;
+            return;
+        }
+        base.OnPreviewKeyDown(e);
+    }
+
+    protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
+    {
+        if (_vm.IsListening)
+        {
+            // A left click elsewhere just stops waiting (and clicks what it was on); on the box
+            // that is waiting, it binds the left mouse button.
+            if (e.ChangedButton == MouseButton.Left && !OnListeningBox(e.OriginalSource as DependencyObject))
+            {
+                bool onHotkey = IsWithin(e.OriginalSource as DependencyObject, HotkeyButton);
+                _vm.CancelListening();
+                if (onHotkey) e.Handled = true; // a second click on the hotkey box just stops waiting
+                return;
+            }
+            int code = e.ChangedButton switch
+            {
+                MouseButton.Left => 0x01,
+                MouseButton.Right => 0x02,
+                MouseButton.Middle => 0x04,
+                MouseButton.XButton1 => 0x05,
+                MouseButton.XButton2 => 0x06,
+                _ => -1,
+            };
+            _vm.HandleKey(code);
+            e.Handled = true;
+            return;
+        }
+        base.OnPreviewMouseDown(e);
+    }
+
+    protected override void OnPreviewMouseWheel(MouseWheelEventArgs e)
+    {
+        if (_vm.IsListening && e.Delta != 0)
+        {
+            _vm.HandleKey(e.Delta > 0 ? KeyNames.WheelUp : KeyNames.WheelDown);
+            e.Handled = true;
+            return;
+        }
+        base.OnPreviewMouseWheel(e);
+    }
+
+    protected override void OnDeactivated(EventArgs e)
+    {
+        _vm.CancelListening();
+        base.OnDeactivated(e);
+    }
+
+    /// <summary>Whether the click landed on the key box of the row that's waiting for a key.</summary>
+    private bool OnListeningBox(DependencyObject? hit)
+    {
+        var row = _vm.ListeningRow;
+        if (row is null) return false;
+        for (var d = hit; d is not null; d = ParentOf(d))
+            if (d is Button { Tag: "KbmKey" } b && ReferenceEquals(b.DataContext, row)) return true;
+        return false;
+    }
+
+    private static bool IsWithin(DependencyObject? hit, DependencyObject target)
+    {
+        for (var d = hit; d is not null; d = ParentOf(d))
+            if (ReferenceEquals(d, target)) return true;
+        return false;
+    }
+
+    private static DependencyObject? ParentOf(DependencyObject d) =>
+        d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
 
     private void Retry_Click(object sender, RoutedEventArgs e) => _vm.Retry();
 

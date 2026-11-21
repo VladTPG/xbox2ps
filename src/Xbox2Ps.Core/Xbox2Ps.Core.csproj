@@ -3,6 +3,8 @@
   <!-- Everything that isn't UI: XInput, the VIIPER client, profiles, the mapper and the bridge loop. -->
   <PropertyGroup>
     <RootNamespace>Xbox2Ps.Core</RootNamespace>
+    <!-- KbmInput reads Raw Input and hook structs through pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
