@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Xbox2Ps.Core/Xbox2Ps.Core.csproj" />
+    <Project Path="src/xbox2ps/xbox2ps.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Xbox2Ps.Tests/Xbox2Ps.Tests.csproj" />
+  </Folder>
+</Solution>

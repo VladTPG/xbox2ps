@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Everything that isn't UI: XInput, the VIIPER client, profiles, the mapper and the bridge loop. -->
+  <PropertyGroup>
+    <RootNamespace>Xbox2Ps.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Xbox2Ps.Tests" />
+  </ItemGroup>
+
+</Project>

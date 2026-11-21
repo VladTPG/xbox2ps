@@ -1,0 +1,403 @@
+<Window x:Class="Xbox2Ps.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Xbox2Ps"
+        xmlns:vm="clr-namespace:Xbox2Ps.ViewModels"
+        Title="xbox2ps"
+        Icon="Assets/xbox2ps.ico"
+        Width="1000" Height="700" MinWidth="820" MinHeight="580"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <local:LevelToBrushConverter x:Key="LevelBrush" />
+        <BooleanToVisibilityConverter x:Key="BoolVis" />
+
+        <SolidColorBrush x:Key="Subtle" Color="#14808080" />
+        <SolidColorBrush x:Key="Line" Color="#33808080" />
+        <SolidColorBrush x:Key="Held" Color="#3328A0FF" />
+        <SolidColorBrush x:Key="Live" Color="#FF16C60C" />
+        <SolidColorBrush x:Key="Accent" Color="#FF2D8CFF" />
+
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="Opacity" Value="0.75" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="Section" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,14,0,6" />
+        </Style>
+        <Style x:Key="StatusDot" TargetType="Ellipse">
+            <Setter Property="Width" Value="10" />
+            <Setter Property="Height" Value="10" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+        </Style>
+        <!-- A DualSense output: the PlayStation symbol in its colour (face buttons only), then the name. -->
+        <DataTemplate x:Key="OutputItem">
+            <StackPanel Orientation="Horizontal">
+                <local:FaceGlyph Output="{Binding Value}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+            </StackPanel>
+        </DataTemplate>
+
+        <Style x:Key="FooterButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="Padding" Value="12,5" />
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+
+        <!-- Header: status and the main switch -->
+        <Border DockPanel.Dock="Top" Padding="20,14" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center" Margin="0,0,28,0">
+                    <TextBlock Text="xbox2ps" FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock Text="Xbox controller → virtual DualSense" Style="{StaticResource Hint}" />
+                </StackPanel>
+                <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Margin="0,2,22,2" ToolTip="VIIPER creates the virtual DualSense">
+                        <Ellipse Style="{StaticResource StatusDot}" Fill="{Binding ViiperLevel, Converter={StaticResource LevelBrush}}" />
+                        <TextBlock Text="VIIPER: " Opacity="0.75" />
+                        <TextBlock Text="{Binding ViiperText}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,22,2">
+                        <Ellipse Style="{StaticResource StatusDot}" Fill="{Binding ControllerLevel, Converter={StaticResource LevelBrush}}" />
+                        <TextBlock Text="Xbox: " Opacity="0.75" />
+                        <TextBlock Text="{Binding ControllerText}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,22,2">
+                        <Ellipse Style="{StaticResource StatusDot}" Fill="{Binding PadLevel, Converter={StaticResource LevelBrush}}" />
+                        <TextBlock Text="DualSense: " Opacity="0.75" />
+                        <TextBlock Text="{Binding PadText}" />
+                    </StackPanel>
+                </WrapPanel>
+                <ComboBox Grid.Column="2" Width="160" VerticalAlignment="Center"
+                          ItemsSource="{Binding SlotOptions}" SelectedIndex="{Binding SlotIndex}"
+                          IsEnabled="{Binding IsIdle}" ToolTip="Which Xbox controller to use" />
+                <Button Grid.Column="3" Margin="12,0,0,0" MinWidth="140" Padding="16,7" VerticalAlignment="Center"
+                        Content="{Binding StartStopLabel}" Click="StartStop_Click"
+                        Style="{DynamicResource AccentButtonStyle}" />
+            </Grid>
+        </Border>
+
+        <!-- Setup / problem banner -->
+        <Border DockPanel.Dock="Top" Margin="20,14,20,0" Padding="16,12" CornerRadius="8"
+                Background="#26FFB900" BorderBrush="#66FFB900" BorderThickness="1"
+                Visibility="{Binding ShowBanner, Converter={StaticResource BoolVis}}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                    <Button Content="Open VIIPER downloads" Click="OpenViiper_Click" Margin="0,0,8,0" Padding="12,5"
+                            Visibility="{Binding BannerShowsDownload, Converter={StaticResource BoolVis}}" />
+                    <Button Content="Retry" Click="Retry_Click" Padding="12,5" />
+                </StackPanel>
+                <StackPanel>
+                    <TextBlock Text="{Binding BannerTitle}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding BannerText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Footer: profiles -->
+        <Border DockPanel.Dock="Bottom" Padding="20,12" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+            <WrapPanel VerticalAlignment="Center">
+                <TextBlock Text="Profile" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,10,0" />
+                <ComboBox Width="220" ItemsSource="{Binding ProfileNames}" SelectedItem="{Binding SelectedProfileName}" />
+                <Button Content="New" Click="NewProfile_Click" Style="{StaticResource FooterButton}" Margin="12,0,0,0" />
+                <Button Content="Duplicate" Click="DuplicateProfile_Click" Style="{StaticResource FooterButton}" />
+                <Button Content="Rename" Click="RenameProfile_Click" Style="{StaticResource FooterButton}" />
+                <Button Content="Delete" Click="DeleteProfile_Click" Style="{StaticResource FooterButton}" />
+                <Button Content="Import…" Click="ImportProfile_Click" Style="{StaticResource FooterButton}" Margin="18,0,0,0" />
+                <Button Content="Export…" Click="ExportProfile_Click" Style="{StaticResource FooterButton}" />
+                <Button Content="Reset to defaults" Click="ResetProfile_Click" Style="{StaticResource FooterButton}" Margin="18,0,0,0" />
+            </WrapPanel>
+        </Border>
+
+        <!-- Body: tabs on the left, live preview on the right -->
+        <Grid Margin="20,12,20,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="270" />
+            </Grid.ColumnDefinitions>
+
+            <TabControl>
+
+                <!-- Buttons -->
+                <TabItem Header="Buttons">
+                    <DockPanel Margin="4,10,4,4">
+                        <TextBlock DockPanel.Dock="Top" Style="{StaticResource Hint}" Margin="0,0,0,10"
+                                   Text="Choose what each Xbox button presses on the DualSense. Press a button on your controller to find its row. Changes apply right away." />
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Buttons}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="2" VerticalAlignment="Top" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:ButtonRowViewModel}">
+                                        <Border x:Name="Row" Padding="8,5" Margin="0,1,10,1" CornerRadius="6">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="18" />
+                                                    <ColumnDefinition Width="140" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <Ellipse x:Name="Dot" Width="9" Height="9" Fill="{StaticResource Line}" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                <ComboBox Grid.Column="2" MinWidth="150" AutomationProperties.Name="{Binding Label}"
+                                                          ItemsSource="{Binding DataContext.OutputOptions, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                          ItemTemplate="{StaticResource OutputItem}" SelectedValuePath="Value"
+                                                          SelectedValue="{Binding Output}" />
+                                            </Grid>
+                                        </Border>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding IsHeld}" Value="True">
+                                                <Setter TargetName="Row" Property="Background" Value="{StaticResource Held}" />
+                                                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource Live}" />
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- Combos -->
+                <TabItem Header="Combos">
+                    <DockPanel Margin="4,10,4,4">
+                        <TextBlock DockPanel.Dock="Top" Style="{StaticResource Hint}" Margin="0,0,0,10"
+                                   Text="Hold two Xbox buttons together to press another DualSense button. While a combo is held, the two buttons don't do their usual job. The default, View + Menu, clicks the touchpad." />
+                        <Button DockPanel.Dock="Bottom" Content="Add combo" Click="AddCombo_Click" HorizontalAlignment="Left" Margin="0,10,0,0" Padding="12,5" />
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Combos}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:ComboViewModel}">
+                                        <Border x:Name="Row" Padding="8,6" Margin="0,2" CornerRadius="6" Background="{StaticResource Subtle}">
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Ellipse x:Name="Dot" Width="9" Height="9" Fill="{StaticResource Line}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                                    <ComboBox Width="160"
+                                                              ItemsSource="{Binding DataContext.InputOptions, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                              DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding First}" />
+                                                    <TextBlock Text="+" VerticalAlignment="Center" FontSize="16" Margin="10,0" />
+                                                    <ComboBox Width="160"
+                                                              ItemsSource="{Binding DataContext.InputOptions, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                              DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Second}" />
+                                                    <TextBlock Text="→" VerticalAlignment="Center" FontSize="16" Margin="10,0" />
+                                                    <ComboBox Width="160"
+                                                              ItemsSource="{Binding DataContext.OutputOptions, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                              ItemTemplate="{StaticResource OutputItem}" SelectedValuePath="Value" SelectedValue="{Binding Output}" />
+                                                    <Button Content="Remove" Click="RemoveCombo_Click" Margin="12,0,0,0" Padding="10,4" />
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Problem}" Foreground="#FFE81123" Margin="19,4,0,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <Trigger Property="Text" Value="">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </Trigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </Border>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                <Setter TargetName="Row" Property="Background" Value="{StaticResource Held}" />
+                                                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource Live}" />
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- Sticks & triggers -->
+                <TabItem Header="Sticks &amp; triggers">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="4,0,12,4">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="24" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Left stick" Style="{StaticResource Section}" />
+                                    <CheckBox Content="Invert left / right" IsChecked="{Binding LeftInvertX}" />
+                                    <CheckBox Content="Invert up / down" IsChecked="{Binding LeftInvertY}" Margin="0,4,0,0" />
+                                    <DockPanel Margin="0,10,0,0">
+                                        <TextBlock DockPanel.Dock="Right" Width="44" TextAlignment="Right" VerticalAlignment="Center"
+                                                   Text="{Binding LeftDeadzone, StringFormat={}{0}%}" />
+                                        <TextBlock Text="Deadzone" VerticalAlignment="Center" Width="80" />
+                                        <Slider Minimum="0" Maximum="50" TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                                Value="{Binding LeftDeadzone}" />
+                                    </DockPanel>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="Right stick" Style="{StaticResource Section}" />
+                                    <CheckBox Content="Invert left / right" IsChecked="{Binding RightInvertX}" />
+                                    <CheckBox Content="Invert up / down" IsChecked="{Binding RightInvertY}" Margin="0,4,0,0" />
+                                    <DockPanel Margin="0,10,0,0">
+                                        <TextBlock DockPanel.Dock="Right" Width="44" TextAlignment="Right" VerticalAlignment="Center"
+                                                   Text="{Binding RightDeadzone, StringFormat={}{0}%}" />
+                                        <TextBlock Text="Deadzone" VerticalAlignment="Center" Width="80" />
+                                        <Slider Minimum="0" Maximum="50" TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                                Value="{Binding RightDeadzone}" />
+                                    </DockPanel>
+                                </StackPanel>
+                            </Grid>
+                            <CheckBox Content="Swap the left and right sticks" IsChecked="{Binding SwapSticks}" Margin="0,14,0,0" />
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                       Text="The deadzone ignores small movements near the centre, for worn sticks that drift." />
+
+                            <TextBlock Text="Triggers" Style="{StaticResource Section}" Margin="0,22,0,6" />
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" Width="44" TextAlignment="Right" VerticalAlignment="Center"
+                                           Text="{Binding TriggerThreshold}" />
+                                <TextBlock Text="Press point" VerticalAlignment="Center" Width="80" />
+                                <Slider Minimum="0" Maximum="254" TickFrequency="1" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                        Value="{Binding TriggerThreshold}" />
+                            </DockPanel>
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                       Text="How far (0-255) LT and RT must be pulled to count as a press. L2 and R2 still get the full analog depth." />
+
+                            <TextBlock Text="Rumble" Style="{StaticResource Section}" Margin="0,22,0,6" />
+                            <CheckBox Content="Send the game's rumble to the Xbox controller" IsChecked="{Binding RumbleEnabled}" />
+                            <DockPanel Margin="0,10,0,0" IsEnabled="{Binding RumbleEnabled}">
+                                <TextBlock DockPanel.Dock="Right" Width="44" TextAlignment="Right" VerticalAlignment="Center"
+                                           Text="{Binding RumbleStrength, StringFormat={}{0}%}" />
+                                <TextBlock Text="Strength" VerticalAlignment="Center" Width="80" />
+                                <Slider Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" VerticalAlignment="Center"
+                                        Value="{Binding RumbleStrength}" />
+                            </DockPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Log -->
+                <TabItem Header="Log">
+                    <DockPanel Margin="4,10,4,4">
+                        <Button DockPanel.Dock="Bottom" Content="Copy log" Click="CopyLog_Click" HorizontalAlignment="Left" Margin="0,10,0,0" Padding="12,5" />
+                        <ListBox x:Name="LogList" ItemsSource="{Binding LogLines}" FontFamily="Cascadia Mono, Consolas" FontSize="12" />
+                    </DockPanel>
+                </TabItem>
+
+                <!-- Options -->
+                <TabItem Header="Options">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="4,0,12,4">
+                            <TextBlock Text="When xbox2ps opens" Style="{StaticResource Section}" />
+                            <CheckBox Content="Start mapping right away" IsChecked="{Binding StartMappingOnLaunch}" />
+                            <CheckBox Content="Start minimized" IsChecked="{Binding StartMinimized}" Margin="0,4,0,0" />
+                            <CheckBox Content="Launch with Windows" IsChecked="{Binding LaunchWithWindows}" Margin="0,4,0,0" />
+
+                            <TextBlock Text="Window" Style="{StaticResource Section}" Margin="0,22,0,6" />
+                            <CheckBox Content="Closing the window keeps xbox2ps running in the tray" IsChecked="{Binding CloseToTray}" />
+
+                            <TextBlock Text="About" Style="{StaticResource Section}" Margin="0,22,0,6" />
+                            <TextBlock Text="{Binding VersionText}" />
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                       Text="Free and open source under the MIT license. The virtual DualSense comes from VIIPER by Alia5 (GPL-3.0), installed separately. xbox2ps isn't affiliated with Sony or Microsoft." />
+                            <WrapPanel Margin="0,10,0,0">
+                                <Button Content="Support development" Click="Donate_Click" Padding="12,5" Margin="0,0,8,0"
+                                        Style="{DynamicResource AccentButtonStyle}"
+                                        Visibility="{Binding ShowDonate, Converter={StaticResource BoolVis}}" />
+                                <Button Content="Project page" Click="ProjectPage_Click" Padding="12,5" Margin="0,0,8,0"
+                                        Visibility="{Binding ShowProjectLink, Converter={StaticResource BoolVis}}" />
+                                <Button Content="VIIPER" Click="OpenViiper_Click" Padding="12,5" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+
+            <!-- Live preview -->
+            <Border Grid.Column="1" Margin="16,0,0,0" Padding="16" CornerRadius="10" Background="{StaticResource Subtle}">
+                <StackPanel>
+                    <TextBlock Text="Live preview" FontSize="15" FontWeight="SemiBold" />
+                    <TextBlock Text="What the DualSense is pressing" Style="{StaticResource Hint}" Margin="0,2,0,8" />
+                    <Border Padding="6" CornerRadius="6" BorderBrush="{StaticResource Line}" BorderThickness="1" MinHeight="44">
+                        <Grid VerticalAlignment="Center">
+                            <TextBlock Text="Nothing pressed" Opacity="0.6" Margin="4,0" VerticalAlignment="Center"
+                                       Visibility="{Binding NothingPressed, Converter={StaticResource BoolVis}}" />
+                            <ItemsControl ItemsSource="{Binding PressedOutputs}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="2" Padding="8,3" CornerRadius="4" Background="{StaticResource Subtle}"
+                                                BorderBrush="{StaticResource Line}" BorderThickness="1">
+                                            <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource OutputItem}" />
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Grid>
+                    </Border>
+
+                    <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel HorizontalAlignment="Center">
+                            <TextBlock Text="Left stick" HorizontalAlignment="Center" Margin="0,0,0,6" />
+                            <Canvas Width="100" Height="100">
+                                <Ellipse Width="100" Height="100" Stroke="{StaticResource Line}" StrokeThickness="2" />
+                                <Ellipse Width="{Binding LeftDeadzoneSize}" Height="{Binding LeftDeadzoneSize}"
+                                         Canvas.Left="{Binding LeftDeadzoneOffset}" Canvas.Top="{Binding LeftDeadzoneOffset}"
+                                         Fill="#22808080" />
+                                <Ellipse Width="12" Height="12" Fill="#99808080" Canvas.Left="{Binding LeftRawX}" Canvas.Top="{Binding LeftRawY}" />
+                                <Ellipse Width="12" Height="12" Fill="{StaticResource Accent}" Canvas.Left="{Binding LeftOutX}" Canvas.Top="{Binding LeftOutY}" />
+                            </Canvas>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                            <TextBlock Text="Right stick" HorizontalAlignment="Center" Margin="0,0,0,6" />
+                            <Canvas Width="100" Height="100">
+                                <Ellipse Width="100" Height="100" Stroke="{StaticResource Line}" StrokeThickness="2" />
+                                <Ellipse Width="{Binding RightDeadzoneSize}" Height="{Binding RightDeadzoneSize}"
+                                         Canvas.Left="{Binding RightDeadzoneOffset}" Canvas.Top="{Binding RightDeadzoneOffset}"
+                                         Fill="#22808080" />
+                                <Ellipse Width="12" Height="12" Fill="#99808080" Canvas.Left="{Binding RightRawX}" Canvas.Top="{Binding RightRawY}" />
+                                <Ellipse Width="12" Height="12" Fill="{StaticResource Accent}" Canvas.Left="{Binding RightOutX}" Canvas.Top="{Binding RightOutY}" />
+                            </Canvas>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Style="{StaticResource Hint}" FontSize="11" Margin="0,6,0,0" TextAlignment="Center"
+                               Text="Grey: your stick. Blue: what the DualSense gets." />
+
+                    <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition />
+                            <RowDefinition />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="L2" VerticalAlignment="Center" />
+                        <ProgressBar Grid.Column="1" Height="8" Maximum="255" Value="{Binding L2Value, Mode=OneWay}" Margin="0,6" />
+                        <TextBlock Grid.Row="1" Text="R2" VerticalAlignment="Center" />
+                        <ProgressBar Grid.Row="1" Grid.Column="1" Height="8" Maximum="255" Value="{Binding R2Value, Mode=OneWay}" Margin="0,6" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>

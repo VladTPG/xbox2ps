@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Version>1.0.0</Version>
+    <Authors>Cojan</Authors>
+    <Product>xbox2ps</Product>
+    <Copyright>Copyright (c) 2026 Cojan</Copyright>
+  </PropertyGroup>
+  <!-- No .pdb files next to the release exe. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+</Project>

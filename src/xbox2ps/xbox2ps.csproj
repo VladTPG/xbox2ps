@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>xbox2ps</AssemblyName>
+    <RootNamespace>Xbox2Ps</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <!-- Only for the tray icon (NotifyIcon); WPF has none of its own. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>Assets\xbox2ps.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- WPF0001: Application.ThemeMode (the Windows 11 Fluent look) is still marked experimental.
+         WFO0003: WinForms' DPI advice; this is a WPF app, which takes per-monitor DPI from app.manifest. -->
+    <NoWarn>$(NoWarn);WPF0001;WFO0003</NoWarn>
+  </PropertyGroup>
+
+  <!-- `dotnet publish` makes one self-contained exe that needs no .NET install. -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true'">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Keep WinForms and GDI+ out of the implicit usings so WPF types aren't ambiguous. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\xbox2ps.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Xbox2Ps.Core\Xbox2Ps.Core.csproj" />
+  </ItemGroup>
+
+</Project>
